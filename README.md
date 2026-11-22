@@ -273,3 +273,26 @@ The main structure of this UAV is 3d printed (Aluminum or PLA), the .stl file wi
 ## 6.Acknowledgments
 
 Thanks for LOAM(J. Zhang and S. Singh. LOAM: Lidar Odometry and Mapping in Real-time), [Livox_Mapping](https://github.com/Livox-SDK/livox_mapping), [LINS](https://github.com/ChaoqinRobotics/LINS---LiDAR-inertial-SLAM) and [Loam_Livox](https://github.com/hku-mars/loam_livox).
+
+
+## Slicer ROS1 workspace
+
+The vehicle snapshot is imported from `20DCYy06/slicer-ugv` commit
+`20739d754c1408ced4cc2431eb593faf879d7c94` (tree
+`b71b2778fe3335e311e77995889b1a38f5e3bf7b`), on upstream
+`hku-mars/FAST_LIO` commit `7cc4175de6f8ba2edf34bab02a42195b141027e9`.
+Of the 72 tracked vehicle files, 64 match corresponding upstream blobs. The
+copied `include/ikd-Tree` tree exactly matches the upstream gitlink
+`e2e3f4e9d3b95a9e66b1ba83dc98d4a05ed8a3c4` from `hku-mars/ikd-Tree`.
+The tree is checked in to keep its contents fixed with this package.
+
+Output uses the private `~runtime_dir` parameter, with absolute
+`Log/` and `PCD/` subdirectories. When no parameter is set, the workspace
+can set `SLICER_RUNTIME_DIR` and output will go under its `fast_lio/`
+subdirectory. The standalone default is `$ROS_HOME/fast_lio` or
+`$HOME/.ros/fast_lio`.
+
+Existing license and author text is retained. The repository `LICENSE`
+contains GPL-2.0, the ROS manifest declares BSD, and the LOAM and IKFoM
+files carry BSD-style notices. Their respective scope still needs maintainer
+confirmation.

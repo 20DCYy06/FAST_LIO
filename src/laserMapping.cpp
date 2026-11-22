@@ -37,6 +37,8 @@
 #include <math.h>
 #include <thread>
 #include <fstream>
+#include <cstdlib>
+#include <boost/filesystem.hpp>
 #include <csignal>
 #include <unistd.h>
 #include <Python.h>
@@ -82,7 +84,7 @@ double time_diff_lidar_to_imu = 0.0;
 mutex mtx_buffer;
 condition_variable sig_buffer;
 
-string root_dir = ROOT_DIR;
+string pcd_dir;
 string map_file_path, lid_topic, imu_topic;
 
 double res_mean_last = 0.05, total_residual = 0.0;
@@ -520,9 +522,9 @@ void publish_frame_world(const ros::Publisher & pubLaserCloudFull)
         if (pcl_wait_save->size() > 0 && pcd_save_interval > 0  && scan_wait_num >= pcd_save_interval)
         {
             pcd_index ++;
-            string all_points_dir(string(string(ROOT_DIR) + "PCD/scans_") + to_string(pcd_index) + string(".pcd"));
+            const string all_points_dir = pcd_dir + "/scans_" + to_string(pcd_index) + ".pcd";
             pcl::PCDWriter pcd_writer;
-            cout << "current scan saved to /PCD/" << all_points_dir << endl;
+            cout << "current scan saved to " << all_points_dir << endl;
             pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
             pcl_wait_save->clear();
             scan_wait_num = 0;
@@ -757,6 +759,45 @@ void h_share_model(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_
     solve_time += omp_get_wtime() - solve_start_;
 }
 
+static boost::filesystem::path runtime_path(const ros::NodeHandle &private_nh)
+{
+    string directory;
+    private_nh.param<std::string>("runtime_dir", directory, "");
+    if (!directory.empty())
+        return directory;
+    const char *workspace_runtime = std::getenv("SLICER_RUNTIME_DIR");
+    if (workspace_runtime && *workspace_runtime)
+        return boost::filesystem::path(workspace_runtime) / "fast_lio";
+    const char *ros_home = std::getenv("ROS_HOME");
+    if (ros_home && *ros_home)
+        return boost::filesystem::path(ros_home) / "fast_lio";
+    const char *home = std::getenv("HOME");
+    return (home && *home) ? boost::filesystem::path(home) / ".ros" / "fast_lio"
+                           : boost::filesystem::path();
+}
+
+static string output_directory(const boost::filesystem::path &directory)
+{
+    if (!directory.is_absolute())
+    {
+        ROS_WARN("FAST-LIO output directory must be absolute. Set ~runtime_dir.");
+        return "";
+    }
+    boost::system::error_code error;
+    boost::filesystem::create_directories(directory, error);
+    if (error)
+    {
+        ROS_WARN_STREAM("FAST-LIO cannot create " << directory << ": " << error.message());
+        return "";
+    }
+    if (access(directory.c_str(), W_OK | X_OK) != 0)
+    {
+        ROS_WARN_STREAM("FAST-LIO cannot write in " << directory);
+        return "";
+    }
+    return directory.string();
+}
+
 int main(int argc, char** argv)
 {
     ros::init(argc, argv, "laserMapping");
@@ -833,18 +874,27 @@ int main(int argc, char** argv)
     kf.init_dyn_share(get_f, df_dx, df_dw, h_share_model, NUM_MAX_ITERATIONS, epsi);
 
     /*** debug record ***/
-    FILE *fp;
-    string pos_log_dir = root_dir + "/Log/pos_log.txt";
-    fp = fopen(pos_log_dir.c_str(),"w");
+    const ros::NodeHandle private_nh("~");
+    const auto output_root = runtime_path(private_nh);
+    const string log_dir = output_directory(output_root / "Log");
+    if (pcd_save_en)
+    {
+        pcd_dir = output_directory(output_root / "PCD");
+        pcd_save_en = !pcd_dir.empty();
+    }
 
+    FILE *fp = nullptr;
     ofstream fout_pre, fout_out, fout_dbg;
-    fout_pre.open(DEBUG_FILE_DIR("mat_pre.txt"),ios::out);
-    fout_out.open(DEBUG_FILE_DIR("mat_out.txt"),ios::out);
-    fout_dbg.open(DEBUG_FILE_DIR("dbg.txt"),ios::out);
-    if (fout_pre && fout_out)
-        cout << "~~~~"<<ROOT_DIR<<" file opened" << endl;
-    else
-        cout << "~~~~"<<ROOT_DIR<<" doesn't exist" << endl;
+    if (!log_dir.empty())
+    {
+        fp = fopen((log_dir + "/pos_log.txt").c_str(), "w");
+        fout_pre.open(log_dir + "/mat_pre.txt", ios::out);
+        fout_out.open(log_dir + "/mat_out.txt", ios::out);
+        fout_dbg.open(log_dir + "/dbg.txt", ios::out);
+        p_imu->set_log_file(log_dir + "/imu.txt");
+        if (!fp || !fout_pre || !fout_out || !fout_dbg)
+            ROS_WARN_STREAM("FAST-LIO could not open every log file in " << log_dir);
+    }
 
     /*** ROS subscribe initialization ***/
     ros::Subscriber sub_pcl = p_pre->lidar_type == AVIA ? \
@@ -1015,7 +1065,8 @@ int main(int argc, char** argv)
                 ext_euler = SO3ToEuler(state_point.offset_R_L_I);
                 fout_out << setw(20) << Measures.lidar_beg_time - first_lidar_time << " " << euler_cur.transpose() << " " << state_point.pos.transpose()<< " " << ext_euler.transpose() << " "<<state_point.offset_T_L_I.transpose()<<" "<< state_point.vel.transpose() \
                 <<" "<<state_point.bg.transpose()<<" "<<state_point.ba.transpose()<<" "<<state_point.grav<<" "<<feats_undistort->points.size()<<endl;
-                dump_lio_state_to_log(fp);
+                if (fp)
+                    dump_lio_state_to_log(fp);
             }
         }
 
@@ -1028,22 +1079,26 @@ int main(int argc, char** argv)
     /* 2. pcd save will largely influence the real-time performences **/
     if (pcl_wait_save->size() > 0 && pcd_save_en)
     {
-        string file_name = string("scans.pcd");
-        string all_points_dir(string(string(ROOT_DIR) + "PCD/") + file_name);
+        const string all_points_dir = pcd_dir + "/scans.pcd";
         pcl::PCDWriter pcd_writer;
-        cout << "current scan saved to /PCD/" << file_name<<endl;
+        cout << "current scan saved to " << all_points_dir << endl;
         pcd_writer.writeBinary(all_points_dir, *pcl_wait_save);
     }
 
     fout_out.close();
     fout_pre.close();
+    if (fp)
+        fclose(fp);
 
-    if (runtime_pos_log)
+    if (runtime_pos_log && !log_dir.empty())
     {
         vector<double> t, s_vec, s_vec2, s_vec3, s_vec4, s_vec5, s_vec6, s_vec7;    
-        FILE *fp2;
-        string log_dir = root_dir + "/Log/fast_lio_time_log.csv";
-        fp2 = fopen(log_dir.c_str(),"w");
+        FILE *fp2 = fopen((log_dir + "/fast_lio_time_log.csv").c_str(), "w");
+        if (!fp2)
+        {
+            ROS_WARN_STREAM("FAST-LIO could not write timing CSV in " << log_dir);
+            return 0;
+        }
         fprintf(fp2,"time_stamp, total time, scan point size, incremental time, search time, delete size, delete time, tree size st, tree size end, add point size, preprocess time\n");
         for (int i = 0;i<time_log_counter; i++){
             fprintf(fp2,"%0.8f,%0.8f,%d,%0.8f,%0.8f,%d,%0.8f,%d,%d,%d,%0.8f\n",T1[i],s_plot[i],int(s_plot2[i]),s_plot3[i],s_plot4[i],int(s_plot5[i]),s_plot6[i],int(s_plot7[i]),int(s_plot8[i]), int(s_plot10[i]), s_plot11[i]);
