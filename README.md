@@ -221,7 +221,7 @@ roslaunch fast_lio mapping_marsim.launch
 
 ### 3.5 PCD file save
 
-Set ``` pcd_save_enable ``` in launchfile to ``` 1 ```. All the scans (in global frame) will be accumulated and saved to the file ``` FAST_LIO/PCD/scans.pcd ``` after the FAST-LIO is terminated. ```pcl_viewer scans.pcd``` can visualize the point clouds.
+Set `pcd_save/pcd_save_en` to `true`. The remaining scans in the global frame are saved to `PCD/scans.pcd` under the configured [runtime directory](#slicer-ros1-workspace) when FAST-LIO exits. Use `pcl_viewer` to view the resulting file.
 
 *Tips for pcl_viewer:*
 - change what to visualize/color by pressing keyboard 1,2,3,4,5 when pcl_viewer is running. 
